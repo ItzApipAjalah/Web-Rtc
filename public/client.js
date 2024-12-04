@@ -34,6 +34,148 @@ const streamEvents = new Map(); // Track stream events by peer ID
 let isReconnecting = false; // Flag to prevent duplicate connections
 let reconnectionTimeout = null; // To handle reconnection debouncing
 
+// Add these variables at the top with other declarations
+let screenStream = null;
+let screenSharePeers = {};
+let isScreenSharing = false;
+
+// Add the screen share button handler
+document.getElementById('screenShareButton').addEventListener('click', async () => {
+    if (!isScreenSharing) {
+        try {
+            screenStream = await navigator.mediaDevices.getDisplayMedia({
+                video: {
+                    cursor: "always"
+                },
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true
+                }
+            });
+
+            // Update button state
+            isScreenSharing = true;
+            const screenShareButton = document.getElementById('screenShareButton');
+            screenShareButton.innerHTML = `
+                <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+                Stop Sharing
+            `;
+            screenShareButton.classList.remove('bg-blue-500/80', 'hover:bg-blue-600');
+            screenShareButton.classList.add('bg-red-500/80', 'hover:bg-red-600');
+
+            // Create video element for screen share
+            const screenVideo = document.createElement('video');
+            screenVideo.muted = true;
+            addVideoStream(screenVideo, screenStream, `screen-${myPeerId}`, true, currentUsername);
+
+            // Share screen with existing peers
+            Object.keys(peers).forEach(peerId => {
+                // Create a new peer connection for screen sharing with username info
+                const screenPeer = new Peer(`screen-${myPeerId}-${peerId}`, {
+                    host: window.location.hostname,
+                    port: window.location.port || 4005,
+                    path: '/peerjs',
+                    debug: 3
+                });
+
+                screenPeer.on('open', () => {
+                    const call = screenPeer.call(peerId, screenStream);
+                    screenSharePeers[peerId] = {
+                        peer: screenPeer,
+                        call: call
+                    };
+                });
+
+                screenPeer.on('error', (err) => {
+                    console.error('Screen share peer error:', err);
+                });
+            });
+
+            // Handle stream end
+            screenStream.getVideoTracks()[0].onended = () => {
+                stopScreenShare();
+            };
+
+        } catch (err) {
+            console.error('Error sharing screen:', err);
+            Swal.fire({
+                title: 'Screen Share Error',
+                text: 'Failed to share screen. Please try again.',
+                icon: 'error',
+                background: '#1F2937',
+                color: '#fff',
+                confirmButtonColor: '#3B82F6'
+            });
+        }
+    } else {
+        stopScreenShare();
+    }
+});
+
+// Update the stopScreenShare function
+function stopScreenShare() {
+    if (screenStream) {
+        screenStream.getTracks().forEach(track => track.stop());
+        screenStream = null;
+    }
+
+    // Remove screen share video
+    const screenVideo = document.querySelector(`[data-peer="screen-${myPeerId}"]`);
+    if (screenVideo) {
+        screenVideo.remove();
+    }
+
+    // Emit screen share stop event to server ONCE
+    socket.emit('screen-share-stopped', ROOM_ID, myPeerId);
+
+    // Close all screen share peer connections
+    Object.entries(screenSharePeers).forEach(([peerId, { peer, call }]) => {
+        if (call) call.close();
+        if (peer) peer.destroy();
+    });
+    screenSharePeers = {};
+
+    // Reset button state
+    isScreenSharing = false;
+    const screenShareButton = document.getElementById('screenShareButton');
+    screenShareButton.innerHTML = `
+        <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+        </svg>
+        Share Screen
+    `;
+    screenShareButton.classList.remove('bg-red-500/80', 'hover:bg-red-600');
+    screenShareButton.classList.add('bg-blue-500/80', 'hover:bg-blue-600');
+}
+
+// Update the socket listener for screen share stopped
+socket.on('screen-share-stopped', (userId) => {
+    console.log('Screen share stopped by user:', userId);
+    
+    // Remove all screen share videos for this user
+    const screenVideos = document.querySelectorAll(`[data-peer^="screen-${userId}"]`);
+    screenVideos.forEach(video => {
+        console.log('Removing screen share video:', video);
+        video.remove();
+    });
+
+    // Clean up any screen share peer connections for this user
+    Object.entries(screenSharePeers).forEach(([peerId, { peer, call }]) => {
+        if (peerId.includes(userId)) {
+            if (call) call.close();
+            if (peer) peer.destroy();
+            delete screenSharePeers[peerId];
+        }
+    });
+});
+
+// Also add this to handle when screen share is stopped by the browser
+screenStream?.getVideoTracks()[0].addEventListener('ended', () => {
+    stopScreenShare();
+});
+
 // Add this function to handle reconnection with debouncing
 function debouncedReconnection() {
     if (reconnectionTimeout) {
@@ -129,47 +271,63 @@ function initializeMedia() {
                 return;
             }
 
+            const isScreenShare = call.peer.includes('screen-');
+            // Extract the original peer ID from the screen share ID (new format: screen-originalPeerId-randomString)
+            const actualPeerId = isScreenShare ? call.peer.split('-')[1] : call.peer;
+
             // Clean up any existing connection
-            cleanupPeerConnection(call.peer);
-
-            // Add connection timeout
-            const connectionTimeout = setTimeout(() => {
-                if (!activeStreams.has(call.peer)) {
-                    console.log('Call timeout - cleaning up');
-                    cleanupPeerConnection(call.peer, true);
+            if (isScreenShare) {
+                if (screenSharePeers[actualPeerId]) {
+                    screenSharePeers[actualPeerId].close();
                 }
-            }, 15000); // 15 second timeout
+            } else {
+                cleanupPeerConnection(actualPeerId);
+            }
 
-            // Add to active connections
-            activeConnections.add(call.peer);
-            call.answer(myVideoStream);
-            
+            // Answer with appropriate stream
+            call.answer(isScreenShare ? null : myVideoStream);
+
             const video = document.createElement('video');
             let streamAdded = false;
-            
+
             call.on('stream', userVideoStream => {
-                clearTimeout(connectionTimeout); // Clear timeout on successful stream
-                
                 if (streamAdded) {
                     console.log('Stream already added for this call');
                     return;
                 }
                 
                 console.log('Received stream from peer:', call.peer);
-                activeStreams.set(call.peer, userVideoStream);
-                addVideoStream(video, userVideoStream, call.peer);
+                
+                if (isScreenShare) {
+                    // Handle screen share stream with proper username
+                    const username = usernames.get(actualPeerId) || 'Anonymous';
+                    addVideoStream(video, userVideoStream, call.peer, true, username);
+                    screenSharePeers[actualPeerId] = call;
+                } else {
+                    // Handle regular video stream
+                    activeStreams.set(call.peer, userVideoStream);
+                    addVideoStream(video, userVideoStream, call.peer, false);
+                    peers[call.peer] = call;
+                }
+                
                 streamAdded = true;
             });
 
             call.on('close', () => {
-                cleanupPeerConnection(call.peer);
+                if (isScreenShare) {
+                    const screenVideo = document.querySelector(`[data-peer="${call.peer}"]`);
+                    if (screenVideo) {
+                        screenVideo.remove();
+                    }
+                    delete screenSharePeers[actualPeerId];
+                } else {
+                    cleanupPeerConnection(call.peer);
+                }
             });
 
-            call.on('error', () => {
-                cleanupPeerConnection(call.peer);
-            });
-
-            peers[call.peer] = call;
+            if (!isScreenShare) {
+                activeConnections.add(call.peer);
+            }
         });
 
         // If we already have a peer ID, join the room now
@@ -292,47 +450,35 @@ window.onerror = function(msg, url, lineNo, columnNo, error) {
 socket.on('user-disconnected', userId => {
     console.log('User disconnected:', userId);
     
-    // Find and remove all elements for this user
+    // Clean up regular video elements
     const elements = document.querySelectorAll(`[data-peer="${userId}"]`);
     elements.forEach(element => {
         console.log('Removing element for disconnected user:', userId);
-        
-        // If it's a video wrapper, clean up the video first
-        const video = element.querySelector('video');
-        if (video) {
-            if (video.srcObject) {
-                const tracks = video.srcObject.getTracks();
-                tracks.forEach(track => {
-                    track.stop();
-                });
-                video.srcObject = null;
-            }
-            video.remove();
-        }
-        
-        // Remove the entire element
         element.remove();
     });
 
-    // Clean up peer connection
+    // Clean up screen share elements
+    const screenElements = document.querySelectorAll(`[data-peer="screen-${userId}"]`);
+    screenElements.forEach(element => {
+        console.log('Removing screen share element for disconnected user:', userId);
+        element.remove();
+    });
+
+    // Clean up peer connections
     if (peers[userId]) {
         peers[userId].close();
         delete peers[userId];
+    }
+
+    if (screenSharePeers[userId]) {
+        screenSharePeers[userId].close();
+        delete screenSharePeers[userId];
     }
 
     // Clean up all tracking data
     activeConnections.delete(userId);
     activeStreams.delete(userId);
     usernames.delete(userId);
-
-    // Double check for any leftover elements
-    setTimeout(() => {
-        const leftoverElements = document.querySelectorAll(`[data-peer="${userId}"]`);
-        leftoverElements.forEach(element => {
-            console.log('Removing leftover element for:', userId);
-            element.remove();
-        });
-    }, 100);
 });
 
 // Add this function to handle when we detect a user refreshing
@@ -423,7 +569,7 @@ peer.on('error', error => {
 const STREAM_TIMEOUT = 15000; // 15 seconds timeout for streams
 
 // Update the addVideoStream function to include loading state
-function addVideoStream(video, stream, peerId) {
+function addVideoStream(video, stream, peerId, isScreenShare = false, screenShareUsername = null) {
     console.log('Adding video stream for peer:', peerId);
     
     // Clean up any duplicate videos first
@@ -431,7 +577,7 @@ function addVideoStream(video, stream, peerId) {
 
     // Create new video wrapper
     const wrapper = document.createElement('div');
-    wrapper.className = 'relative rounded-lg overflow-hidden bg-gray-800';
+    wrapper.className = `relative rounded-lg overflow-hidden bg-gray-800 ${isScreenShare ? 'col-span-2 row-span-2' : ''}`;
     wrapper.setAttribute('data-peer', peerId);
     
     // Add loading spinner
@@ -444,7 +590,7 @@ function addVideoStream(video, stream, peerId) {
     
     // Set up video element
     video.srcObject = stream;
-    video.className = 'w-full h-full object-cover opacity-0 transition-opacity duration-300';
+    video.className = 'w-full h-full object-contain opacity-0 transition-opacity duration-300';
     
     let playAttempts = 0;
     const maxPlayAttempts = 3;
@@ -504,10 +650,24 @@ function addVideoStream(video, stream, peerId) {
         }
     });
 
-    // Add username label
+    // Update the username label for screen shares
     const usernameDiv = document.createElement('div');
     usernameDiv.className = 'absolute bottom-3 left-3 bg-black/70 px-3 py-1 rounded-lg text-sm';
-    usernameDiv.textContent = peerId === 'me' ? currentUsername : (usernames.get(peerId) || 'Anonymous');
+    
+    if (isScreenShare) {
+        if (peerId === `screen-${myPeerId}`) {
+            usernameDiv.textContent = `${currentUsername}'s Screen`;
+        } else if (screenShareUsername) {
+            usernameDiv.textContent = `${screenShareUsername}'s Screen`;
+        } else {
+            // Extract username from peer ID for legacy connections
+            const originalPeerId = peerId.split('-')[1];
+            const username = usernames.get(originalPeerId) || 'Anonymous';
+            usernameDiv.textContent = `${username}'s Screen`;
+        }
+    } else {
+        usernameDiv.textContent = peerId === 'me' ? currentUsername : (usernames.get(peerId) || 'Anonymous');
+    }
     
     // Add status indicators container
     const statusContainer = document.createElement('div');
@@ -561,7 +721,7 @@ function addVideoStream(video, stream, peerId) {
     activeStreams.set(peerId, stream);
 }
 
-// Update the connectToNewUser function to include better stream handling
+// Update the connectToNewUser function to handle screen sharing
 function connectToNewUser(userId, stream) {
     console.log('Connecting to new user:', userId);
     
@@ -579,6 +739,7 @@ function connectToNewUser(userId, stream) {
     // Clean up any existing connection
     cleanupPeerConnection(userId, true);
 
+    // Make regular video call
     const call = peer.call(userId, stream);
     const video = document.createElement('video');
     let streamAdded = false;
@@ -615,6 +776,29 @@ function connectToNewUser(userId, stream) {
 
     peers[userId] = call;
     activeConnections.add(userId);
+
+    // If we're currently sharing screen, share it with the new user
+    if (screenStream) {
+        // Create a new peer connection for screen sharing
+        const screenPeer = new Peer(`screen-${myPeerId}-${userId}`, {
+            host: window.location.hostname,
+            port: window.location.port || 4005,
+            path: '/peerjs',
+            debug: 3
+        });
+
+        screenPeer.on('open', () => {
+            const screenCall = screenPeer.call(userId, screenStream);
+            screenSharePeers[userId] = {
+                peer: screenPeer,
+                call: screenCall
+            };
+        });
+
+        screenPeer.on('error', (err) => {
+            console.error('Screen share peer error:', err);
+        });
+    }
 }
 
 // Add this function to handle cleanup before adding new streams
@@ -763,6 +947,27 @@ function cleanupPeerConnection(peerId, force = false) {
     
     // Clear tracking data
     activeConnections.delete(peerId);
+
+    // Add screen share cleanup
+    const screenPeerId = `screen-${peerId}`;
+    const screenVideo = document.querySelector(`[data-peer="${screenPeerId}"]`);
+    if (screenVideo) {
+        const video = screenVideo.querySelector('video');
+        if (video && video.srcObject) {
+            const tracks = video.srcObject.getTracks();
+            tracks.forEach(track => {
+                track.stop();
+                video.srcObject.removeTrack(track);
+            });
+            video.srcObject = null;
+        }
+        screenVideo.remove();
+    }
+
+    if (screenSharePeers[peerId]) {
+        screenSharePeers[peerId].close();
+        delete screenSharePeers[peerId];
+    }
 }
 
 // Keep only these visibility handlers for reconnection

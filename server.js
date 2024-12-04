@@ -244,6 +244,11 @@ io.on('connection', socket => {
             socket.removeAllListeners();
             socket.disconnect(true);
         });
+
+        socket.on('screen-share-stopped', (roomId, userId) => {
+            // Broadcast to all users in the room that the screen share has stopped
+            socket.to(roomId).emit('screen-share-stopped', userId);
+        });
     });
 });
 
