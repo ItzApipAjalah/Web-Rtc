@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Call App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    gridTemplateColumns: {
+                        'auto-fill-300': 'repeat(auto-fit, minmax(300px, 1fr))',
+                    },
+                },
+            },
+        }
+    </script>
+    <style>
+        #video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+            gap: 1rem;
+            padding: 1rem;
+            grid-auto-rows: 300px;
+        }
+
+        @media (max-width: 640px) {
+            #video-grid {
+                grid-auto-rows: 200px;
+                padding: 0.5rem;
+                gap: 0.5rem;
+            }
+        }
+
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            border-radius: 1rem;
+            background-color: #1f2937;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: transform 0.2s;
+        }
+
+        .video-wrapper:hover {
+            transform: scale(1.02);
+        }
+
+        .video-wrapper video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* Ensure each grid cell takes up equal space */
+        #video-grid > * {
+            aspect-ratio: 16/9;
+        }
+
+        /* Add smooth transitions */
+        .transition-all {
+            transition: all 0.3s ease;
+        }
+
+        /* Add glass effect to controls */
+        .glass-effect {
+            background: rgba(17, 24, 39, 0.8);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Add hover effects to buttons */
+        .hover-scale {
+            transition: transform 0.2s;
+        }
+        .hover-scale:hover {
+            transform: scale(1.05);
+        }
+
+        /* Mobile optimizations */
+        @media (max-width: 640px) {
+            .video-wrapper {
+                border-radius: 0.5rem;
+            }
+
+            .status-icon svg {
+                width: 16px;
+                height: 16px;
+            }
+
+            .room-info {
+                font-size: 0.875rem;
+            }
+        }
+
+        /* Landscape mode optimizations */
+        @media (max-height: 500px) and (orientation: landscape) {
+            #video-grid {
+                grid-auto-rows: calc(100vh - 120px);
+                padding-top: 60px;
+            }
+
+            .controls {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                padding: 0.5rem;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-900 to-gray-800 text-white">
+    <div class="min-h-screen flex flex-col">
+        <!-- Top Bar -->
+        <div class="absolute top-0 left-0 right-0 glass-effect z-50 px-3 sm:px-6 py-2 sm:py-4">
+            <div class="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 sm:gap-4">
+                <div class="flex flex-col sm:flex-row gap-2 sm:gap-6 w-full sm:w-auto">
+                    <div class="flex items-center gap-2 bg-gray-700/50 px-3 py-2 rounded-lg text-sm sm:text-base">
+                        <span class="text-gray-400">Room:</span>
+                        <span id="roomId" class="font-mono text-blue-400 font-semibold"></span>
+                        <button id="copyButton" class="ml-2 text-gray-400 hover:text-blue-400 transition-colors">
+                            <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="flex items-center gap-2 bg-gray-700/50 px-3 py-2 rounded-lg text-sm sm:text-base">
+                        <span class="text-gray-400">User:</span>
+                        <span id="username" class="text-blue-400 font-semibold"></span>
+                    </div>
+                </div>
+                <button id="leaveButton" 
+                    class="px-3 sm:px-4 py-2 bg-red-500/80 hover:bg-red-600 rounded-lg transition-colors hover-scale flex items-center gap-2 text-sm sm:text-base w-full sm:w-auto justify-center">
+                    <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+                    </svg>
+                    Leave Room
+                </button>
+            </div>
+        </div>
+
+        <!-- Video Grid Container -->
+        <div class="flex-1 bg-gradient-to-br from-gray-900 to-black pt-24 sm:pt-20">
+            <div id="video-grid"></div>
+        </div>
+
+        <!-- Controls -->
+        <div class="glass-effect p-2 sm:p-4 flex justify-center gap-2 sm:gap-4">
+            <button id="muteButton" 
+                class="px-3 sm:px-6 py-2 sm:py-3 bg-blue-500/80 hover:bg-blue-600 rounded-lg transition-colors hover-scale flex items-center gap-2 text-sm sm:text-base">
+                <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+                </svg>
+                Mute
+            </button>
+            <button id="videoButton" 
+                class="px-3 sm:px-6 py-2 sm:py-3 bg-blue-500/80 hover:bg-blue-600 rounded-lg transition-colors hover-scale flex items-center gap-2 text-sm sm:text-base">
+                <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                </svg>
+                Stop Video
+            </button>
+        </div>
+    </div>
+
+    <script src="/supabase.js"></script>
+    <script src="/client.js"></script>
+    <script>
+        // Update the copy button functionality with SweetAlert
+        document.getElementById('copyButton').addEventListener('click', () => {
+            const roomId = document.getElementById('roomId').textContent;
+            navigator.clipboard.writeText(roomId)
+                .then(() => {
+                    Swal.fire({
+                        title: 'Copied!',
+                        text: 'Room ID copied to clipboard',
+                        icon: 'success',
+                        background: '#1F2937',
+                        color: '#fff',
+                        confirmButtonColor: '#3B82F6',
+                        timer: 1500,
+                        showConfirmButton: false
+                    });
+                })
+                .catch(err => {
+                    console.error('Failed to copy room ID:', err);
+                    Swal.fire({
+                        title: 'Error!',
+                        text: 'Failed to copy room ID',
+                        icon: 'error',
+                        background: '#1F2937',
+                        color: '#fff',
+                        confirmButtonColor: '#3B82F6'
+                    });
+                });
+        });
+
+        // Update leave button with confirmation
+        document.getElementById('leaveButton').addEventListener('click', () => {
+            Swal.fire({
+                title: 'Leave Room?',
+                text: 'Are you sure you want to leave this room?',
+                icon: 'warning',
+                background: '#1F2937',
+                color: '#fff',
+                showCancelButton: true,
+                confirmButtonColor: '#EF4444',
+                cancelButtonColor: '#6B7280',
+                confirmButtonText: 'Yes, leave room',
+                cancelButtonText: 'Cancel'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    window.location.reload();
+                }
+            });
+        });
+    </script>
+</body>
+</html>

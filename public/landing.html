@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Call App - Welcome</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+</head>
+<body class="bg-gradient-to-br from-gray-900 to-gray-800 text-white min-h-screen">
+    <!-- Navigation -->
+    <nav class="bg-gray-900/50 backdrop-blur-sm fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <span class="text-2xl font-bold text-blue-500">VideoMeet</span>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="flex items-center gap-2">
+                        <span class="text-gray-300">Welcome,</span>
+                        <span id="username" class="font-semibold text-blue-400"></span>
+                    </div>
+                    <button onclick="handleSignOut()" 
+                        class="px-4 py-2 bg-red-500/80 hover:bg-red-600 rounded-lg transition-colors">
+                        Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="pt-24 pb-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+        <!-- Error Message -->
+        <div id="error-message" 
+            class="hidden mb-6 p-4 bg-red-500/90 rounded-lg text-white text-center transform transition-all">
+        </div>
+
+        <!-- Create/Join Section -->
+        <div class="grid md:grid-cols-2 gap-8 mb-12">
+            <!-- Create Room Card -->
+            <div class="bg-gray-800/50 backdrop-blur-sm p-6 rounded-xl shadow-xl">
+                <h2 class="text-xl font-semibold mb-4 text-blue-400">Create New Room</h2>
+                <p class="text-gray-400 mb-6">Start a new video meeting instantly</p>
+                
+                <!-- Add room type selection -->
+                <div class="flex items-center gap-4 mb-6">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="roomType" value="public" checked
+                            class="w-4 h-4 text-blue-500 focus:ring-blue-500">
+                        <span class="text-gray-300">Public Room</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="roomType" value="private"
+                            class="w-4 h-4 text-blue-500 focus:ring-blue-500">
+                        <span class="text-gray-300">Private Room</span>
+                    </label>
+                </div>
+                
+                <!-- Update create room button to use new function -->
+                <button onclick="createRoom()" 
+                    class="block w-full py-3 bg-green-500/80 hover:bg-green-600 rounded-lg text-center transition-colors font-medium">
+                    Create Room
+                </button>
+            </div>
+
+            <!-- Join Room Card -->
+            <div class="bg-gray-800/50 backdrop-blur-sm p-6 rounded-xl shadow-xl">
+                <h2 class="text-xl font-semibold mb-4 text-blue-400">Join Existing Room</h2>
+                <div class="space-y-4">
+                    <input type="text" id="roomInput" placeholder="Enter Room ID" 
+                        class="w-full p-3 bg-gray-700/50 border-2 border-gray-600 rounded-lg 
+                               focus:outline-none focus:border-blue-500 transition-colors">
+                    <button onclick="joinRoom()" 
+                        class="w-full py-3 bg-blue-500/80 hover:bg-blue-600 rounded-lg transition-colors font-medium">
+                        Join Room
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active Rooms Section -->
+        <div class="bg-gray-800/50 backdrop-blur-sm rounded-xl shadow-xl p-6">
+            <h2 class="text-2xl font-semibold mb-6 text-blue-400">Active Rooms</h2>
+            <div id="roomsList" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Loading State -->
+                <div class="loading-spinner col-span-full flex justify-center py-12">
+                    <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/supabase.js"></script>
+    <script>
+        // Check for error parameter in URL
+        window.onload = async function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const error = urlParams.get('error');
+            if (error) {
+                Swal.fire({
+                    title: 'Error!',
+                    text: error,
+                    icon: 'error',
+                    background: '#1F2937',
+                    color: '#fff',
+                    confirmButtonColor: '#3B82F6'
+                });
+                // Remove error from URL
+                window.history.replaceState({}, document.title, '/');
+            }
+
+            const { user, error: userError } = await getCurrentUser();
+            if (!user) {
+                window.location.href = '/login';
+                return;
+            }
+            document.getElementById('username').textContent = user.profile.username;
+        }
+
+        async function joinRoom(roomId) {
+            if (!roomId) {
+                roomId = document.getElementById('roomInput').value.trim();
+            }
+            
+            const errorDiv = document.getElementById('error-message');
+            
+            if (!roomId) {
+                Swal.fire({
+                    title: 'Error!',
+                    text: 'Please enter a room ID',
+                    icon: 'error',
+                    background: '#1F2937',
+                    color: '#fff',
+                    confirmButtonColor: '#3B82F6'
+                });
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/check-room/${roomId}`);
+                const data = await response.json();
+                
+                if (!data.exists) {
+                    Swal.fire({
+                        title: 'Error!',
+                        text: 'Room not found or has expired',
+                        icon: 'error',
+                        background: '#1F2937',
+                        color: '#fff',
+                        confirmButtonColor: '#3B82F6'
+                    });
+                    return;
+                }
+
+                // Handle private rooms
+                if (data.isPrivate) {
+                    const { value: privateLink } = await Swal.fire({
+                        title: 'Private Room',
+                        text: 'Please enter the private link or access code',
+                        input: 'text',
+                        inputPlaceholder: 'Enter private link or code...',
+                        background: '#1F2937',
+                        color: '#fff',
+                        confirmButtonColor: '#3B82F6',
+                        showCancelButton: true,
+                        inputValidator: (value) => {
+                            if (!value) {
+                                return 'You need to enter something!';
+                            }
+                        }
+                    });
+
+                    if (!privateLink) {
+                        return; // User cancelled
+                    }
+                    
+                    // Extract the private token from the provided link
+                    try {
+                        const url = new URL(privateLink);
+                        const privateToken = url.searchParams.get('privateToken');
+                        if (privateToken) {
+                            window.location.href = `/room/${roomId}?token=access_granted&privateToken=${privateToken}`;
+                            return;
+                        }
+                    } catch (e) {
+                        // If not a URL, try using the input directly as a token
+                        if (privateLink === roomId) {
+                            window.location.href = `/room/${roomId}?token=access_granted&privateToken=${privateLink}`;
+                            return;
+                        }
+                    }
+                    
+                    Swal.fire({
+                        title: 'Error!',
+                        text: 'Invalid private room access code',
+                        icon: 'error',
+                        background: '#1F2937',
+                        color: '#fff',
+                        confirmButtonColor: '#3B82F6'
+                    });
+                    return;
+                }
+
+                // For public rooms, proceed normally
+                window.location.href = `/room/${roomId}?token=access_granted`;
+            } catch (error) {
+                Swal.fire({
+                    title: 'Error!',
+                    text: 'Error checking room status',
+                    icon: 'error',
+                    background: '#1F2937',
+                    color: '#fff',
+                    confirmButtonColor: '#3B82F6'
+                });
+            }
+        }
+
+        document.getElementById('roomInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                joinRoom();
+            }
+        });
+
+        async function handleSignOut() {
+            const { error } = await signOut();
+            if (!error) {
+                window.location.href = '/login';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            const roomsList = document.getElementById('roomsList');
+            
+            async function fetchAndDisplayRooms() {
+                try {
+                    const response = await fetch('/api/active-rooms');
+                    const data = await response.json();
+                    
+                    if (!data.rooms || data.rooms.length === 0) {
+                        roomsList.innerHTML = `
+                            <div class="col-span-full text-center py-12">
+                                <p class="text-gray-400">No active rooms available. Create one!</p>
+                            </div>
+                        `;
+                        return;
+                    }
+                    
+                    roomsList.innerHTML = data.rooms.map(room => `
+                        <div class="bg-gray-700/50 rounded-lg p-4 hover:bg-gray-700 transition-colors">
+                            <div class="flex justify-between items-start mb-3">
+                                <div>
+                                    <h3 class="font-medium text-lg">${room.roomId.slice(0, 8)}...</h3>
+                                    <p class="text-sm text-gray-400">
+                                        Created ${new Date(room.createdAt).toLocaleTimeString()}
+                                    </p>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <span class="flex items-center gap-1 bg-gray-600/50 px-2 py-1 rounded-full text-sm">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                            <path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1H7zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+                                            <path d="M5.216 14A2.238 2.238 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.325 6.325 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1h4.216z"/>
+                                        </svg>
+                                        ${room.participantCount}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="flex flex-wrap gap-2 mb-4">
+                                ${room.participants.map(p => `
+                                    <span class="bg-gray-600/50 px-2 py-1 rounded-full text-sm">
+                                        ${p.username}
+                                    </span>
+                                `).join('')}
+                            </div>
+                            <button onclick="joinRoom('${room.roomId}')" 
+                                class="w-full py-2 bg-blue-500/80 hover:bg-blue-600 rounded-lg transition-colors text-sm font-medium">
+                                Join Room
+                            </button>
+                        </div>
+                    `).join('');
+                } catch (error) {
+                    console.error('Error fetching rooms:', error);
+                    roomsList.innerHTML = `
+                        <div class="col-span-full text-center py-12">
+                            <p class="text-red-400">Failed to load rooms. Please try again later.</p>
+                        </div>
+                    `;
+                }
+            }
+
+            await fetchAndDisplayRooms();
+            setInterval(fetchAndDisplayRooms, 10000);
+        });
+
+        function joinRoom(roomId) {
+            window.location.href = `/room/${roomId}?token=access_granted`;
+        }
+
+        // Add this function to handle room creation
+        async function createRoom() {
+            const isPrivate = document.querySelector('input[name="roomType"]:checked').value === 'private';
+            
+            if (isPrivate) {
+                const roomId = generateRoomId();
+                const roomLink = `${window.location.origin}/room/${roomId}?token=access_granted&privateToken=${roomId}`;
+                
+                await Swal.fire({
+                    title: 'Private Room Created!',
+                    html: `
+                        <div class="text-left">
+                            <p class="mb-4">Share this link with people you want to invite:</p>
+                            <div class="bg-gray-700 p-3 rounded-lg mb-4 break-all">
+                                <code class="text-sm">${roomLink}</code>
+                            </div>
+                            <p class="mb-2">Or share this access code:</p>
+                            <div class="bg-gray-700 p-3 rounded-lg text-center">
+                                <code class="text-xl font-bold">${roomId}</code>
+                            </div>
+                        </div>
+                    `,
+                    background: '#1F2937',
+                    color: '#fff',
+                    confirmButtonColor: '#3B82F6',
+                    confirmButtonText: 'Join Room',
+                    showDenyButton: true,
+                    showCancelButton: true,
+                    denyButtonText: 'Copy Link',
+                    denyButtonColor: '#6B7280',
+                    cancelButtonText: 'Cancel',
+                    cancelButtonColor: '#374151',
+                    reverseButtons: true
+                }).then((result) => {
+                    if (result.isDenied) {
+                        // Copy link to clipboard
+                        navigator.clipboard.writeText(roomLink).then(() => {
+                            Swal.fire({
+                                title: 'Copied!',
+                                text: 'Room link copied to clipboard',
+                                icon: 'success',
+                                background: '#1F2937',
+                                color: '#fff',
+                                confirmButtonColor: '#3B82F6',
+                                timer: 1500,
+                                showConfirmButton: false
+                            });
+                        });
+                        // Create and join room after copying
+                        window.location.href = `/create-room?private=${isPrivate}&roomId=${roomId}`;
+                    } else if (result.isConfirmed) {
+                        // Just join room
+                        window.location.href = `/create-room?private=${isPrivate}&roomId=${roomId}`;
+                    }
+                    // If cancelled, do nothing
+                });
+            } else {
+                window.location.href = `/create-room?private=${isPrivate}`;
+            }
+        }
+
+        // Add this helper function
+        function generateRoomId() {
+            return Math.random().toString(36).substring(2, 7);
+        }
+    </script>
+</body>
+</html> 

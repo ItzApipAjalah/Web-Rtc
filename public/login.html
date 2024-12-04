@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Call App - Login</title>
+    <link rel="stylesheet" href="/auth.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="auth-box">
+            <h1>Login</h1>
+            <div id="error-message" class="error-message"></div>
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <input type="email" id="email" placeholder="Email" required>
+                <input type="password" id="password" placeholder="Password" required>
+                <button type="submit" class="auth-button">Login</button>
+            </form>
+            <p class="switch-text">
+                Don't have an account? <a href="/register">Register</a>
+            </p>
+        </div>
+    </div>
+
+    <script src="/supabase.js"></script>
+    <script>
+        async function handleLogin(event) {
+            event.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('error-message');
+            
+            const { data, error } = await signIn(email, password);
+            
+            if (error) {
+                errorDiv.textContent = error;
+                errorDiv.style.display = 'block';
+            } else {
+                window.location.href = '/';
+            }
+        }
+
+        // Check if user is already logged in
+        window.onload = async function() {
+            const { user, error } = await getCurrentUser();
+            if (user) {
+                window.location.href = '/';
+            }
+        }
+    </script>
+</body>
+</html> 
